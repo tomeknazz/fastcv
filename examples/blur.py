@@ -2,7 +2,7 @@ import cv2
 import torch
 import fastcv
 
-img = cv2.imread("artifacts/test.jpg")
+img = cv2.imread("../artifacts/test.jpg")
 img_tensor = torch.from_numpy(img).cuda()
 blurred_tensor = fastcv.blur(img_tensor, 10)
 
