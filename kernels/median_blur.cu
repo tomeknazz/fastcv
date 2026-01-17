@@ -94,6 +94,8 @@ float median(thrust::device_vector<float> &window){
 
 
 //This should in theory work
+//blur_size_x and blur_size_y maybe could be used for non square blurs???
+//For further testing
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out, int width, int height, int channels, int blur_size, int blur_size_x = NULL, int blur_size_y = NULL) {
     int col = blockIdx.x +blockDim.x * threadIdx.x;
     int row = blockIdx.y +blockDim.y * threadIdx.y;
