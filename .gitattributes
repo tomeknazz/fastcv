@@ -1,0 +1,2 @@
+*.hpp linguist-vendored
+kernels/nvtx3.hpp linguist-vendored
