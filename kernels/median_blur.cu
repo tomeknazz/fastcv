@@ -22,7 +22,7 @@
 /*
 TODO:
 
-Modern c++ (Choose 2):
+Modern c++ (Choose 2): DONE
 -Templates
 -Iterators
 -Containers - DONE
@@ -61,9 +61,9 @@ CUDA kenel:
 
 
 */
-
+//& to avoid copying memory
 // Will cause integer rounding errors
-int median(thrust::device_vector<int> window){
+int median(thrust::device_vector<int> &window){
     thrust::sort(window.begin(), window.end());
     int size = window.size();
     if (size % 2 == 1)
@@ -74,13 +74,13 @@ int median(thrust::device_vector<int> window){
 
 //Less accurate median
 //For further testing
-int fast_median(thrust::device_vector<int> window){
+int fast_median(thrust::device_vector<int> &window){
     thrust::sort(window.begin(), window.end());
     return window[window.size() / 2];
 }
 
 //For further testing
-float median(thrust::device_vector<float> window){
+float median(thrust::device_vector<float> &window){
     thrust::sort(window.begin(), window.end());
     int size = window.size();
     if (size % 2 == 1)
@@ -92,10 +92,35 @@ float median(thrust::device_vector<float> window){
 //Could do version that takes &window to avoid copying
 //Maybe todo later
 
+
+//This should in theory work
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out, int width, int height, int channels, int blur_size, int blur_size_x = NULL, int blur_size_y = NULL) {
     int col = blockIdx.x +blockDim.x * threadIdx.x;
     int row = blockIdx.y +blockDim.y * threadIdx.y;
 
+    if(col<width && row<height){
+        for(int c=0; c<channels; ++c){
+            thrust::device_vector<int> window;
+            //Collect pixels in the window
+            for(int blurRow = -blur_size; blurRow <= blur_size; ++blurRow){
+                for(int blurCol = -blur_size; blurCol <= blur_size; ++blurCol){
+                    int curRow = row + blurRow;
+                    int curCol = col + blurCol;
+                    //Check bounds
+                    if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
+                        //Indexing like this because input is R,G,B,R,G,B,... etc.
+                        window.push_back(in[(curRow * width + curCol) * channels + c]);
+                    }
+                }
+            }
+            //Compute median
+            int med = median(window);
+            //Same here with the indexing
+            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med);
+        }
+
+
+    }
 
 
 
