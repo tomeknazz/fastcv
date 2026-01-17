@@ -13,4 +13,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
     m.def("sobel", &sobel, "sobel filter kernel");
     m.def("dilate", &dilation, "dilation kernel");
     m.def("erode", &erosion, "erosion kernel");
+    m.def("median_blur", &median_blur, "median blur kernel");
 }
