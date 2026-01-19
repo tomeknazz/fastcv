@@ -62,8 +62,9 @@ CUDA kenel:
 -uses streaming multiprocessor efficiently
 -uses shared and global memory
 
-
 */
+
+/*
 __device__ int partition(int arr[], int low, int high) {
     int pivot = arr[high];
     int i = (low - 1);
@@ -117,13 +118,15 @@ __device__ float median(thrust::device_vector<float> &window){
 //Could do version that takes &window to avoid copying
 //Maybe todo later
 
-
+*/
 //This should in theory work
 //blur_size_x and blur_size_y maybe could be used for non square blurs???
 //For further testing
-__global__ void medianBlurKernel(unsigned char* in, unsigned char* out, int array_size ,int width, int height, int channels, int blur_size, int blur_size_x = NULL, int blur_size_y = NULL) {
+__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size, int blur_size_x = NULL, int blur_size_y = NULL) {
     int col = blockIdx.x +blockDim.x * threadIdx.x;
     int row = blockIdx.y +blockDim.y * threadIdx.y;
+    /*
+
     int i = 0;
     if(col<width && row<height){
         for(int c=0; c<channels; ++c){
@@ -149,9 +152,10 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out, int arra
             out[(row * width + col) * channels + c] = static_cast<unsigned char>(med);
         }
     }
+    */
 }
 
-torch::Tensor median_blur(torch::Tensor img, int blur_size, int array_size){
+torch::Tensor median_blur(torch::Tensor img, int blur_size){
     assert(img.device().type() == torch::kCUDA);
     assert(img.dtype() == torch::kByte);
 
@@ -167,7 +171,7 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size, int array_size){
     medianBlurKernel<<<dimGrid, dimBlock, 0, at::cuda::getCurrentCUDAStream()>>>(
         img.data_ptr<unsigned char>(),
         result.data_ptr<unsigned char>(),
-        array_size, width, height, channels, blur_size);
+        width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return result;
