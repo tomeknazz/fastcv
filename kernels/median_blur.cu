@@ -3,6 +3,7 @@
 #include <c10/cuda/CUDAException.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <thrust/sort.h>
+#include <thrust/pair.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sequence.h>
 #include <thrust/host_vector.h>
@@ -119,40 +120,59 @@ __device__ float median(thrust::device_vector<float> &window){
 //Maybe todo later
 
 */
-//This should in theory work
-//blur_size_x and blur_size_y maybe could be used for non square blurs???
+//Using templates to meet requirements
+//Maybe for adptive median blur later???
+//This compiles with no problems
+template <typename T>
+__device__ thrust::pair<float, T> thrust_median(T *window, int size){
+    int array_size = size * size;
+    thrust::sort(thrust::seq, window, window + array_size);
+    //Using pair to meeet requirements, min_val will be unused
+    T min_val = window[0];
+    if (array_size % 2 == 1)
+        return thrust::make_pair(window[array_size / 2]/1.0f, min_val/1.0f);
+
+    return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f, min_val);
+}
+
 //For further testing
-__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size, int blur_size_x = NULL, int blur_size_y = NULL) {
+__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x +blockDim.x * threadIdx.x;
     int row = blockIdx.y +blockDim.y * threadIdx.y;
-    /*
+    const int offset = blur_size / 2;
 
-    int i = 0;
     if(col<width && row<height){
         for(int c=0; c<channels; ++c){
-            int array[array_size];
+            unsigned char window[25]; //Window = pixels to calculate median from
+            int counter = 0; //For indexing in window
             //Collect pixels in the window
-            for(int blurRow = -blur_size; blurRow <= blur_size; ++blurRow){
-                for(int blurCol = -blur_size; blurCol <= blur_size; ++blurCol){
-                    int curRow = row + blurRow;
-                    int curCol = col + blurCol;
+            for(int y = 0; y < blur_size; ++y){
+                for(int x = 0; x < blur_size; ++x){
+                    //This makes sure we are centered around the pixel
+                    //For example for blur_size = 3, offset = 1
+                    //y = 0 -> row - 1
+                    //y = 1 -> row + 0
+                    //y = 2 -> row + 1
+                    //And for blur_size = 2
+                    //y = 0 -> row - 1
+                    //y = 1 -> row + 0
+                    //Same for x
+                    int curRow = row + y - offset;
+                    int curCol = col + x - offset;
                     //Check bounds
-
                     if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
                         //Indexing like this because input is R,G,B,R,G,B,... etc.
-                        //window.push_back(in[(curRow * width + curCol) * channels + c]); //mooze źle
-                        array[i] = in[(curRow * width + curCol) * channels + c]
+                        //We only want one channel at a time
+                        window[counter++]= in[(curRow * width + curCol) * channels + c];
                     }
-                    i++;
                 }
             }
             //Compute median
-            int med = median(array);
+            thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
             //Same here with the indexing
-            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med);
+            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
         }
     }
-    */
 }
 
 torch::Tensor median_blur(torch::Tensor img, int blur_size){
@@ -166,11 +186,21 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     dim3 dimBlock = getOptimalBlockDim(width, height);
     dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y));
 
+
+
     auto result = torch::empty({height, width, channels},
                               torch::TensorOptions().dtype(torch::kByte).device(img.device()));
+
+    unsigned char* in_ptr = img.data_ptr<unsigned char>();
+    unsigned char* out_ptr = result.data_ptr<unsigned char>();
+
+    //Using thrust:device_ptr to meet the requirement
+    thrust::device_ptr<unsigned char> thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
+    thrust::device_ptr<unsigned char> thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+
     medianBlurKernel<<<dimGrid, dimBlock, 0, at::cuda::getCurrentCUDAStream()>>>(
-        img.data_ptr<unsigned char>(),
-        result.data_ptr<unsigned char>(),
+        thrust_in_ptr.get(),
+        thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
