@@ -126,7 +126,7 @@ __device__ float median(thrust::device_vector<float> &window){
 template <typename T>
 __device__ thrust::pair<float, T> thrust_median(T *window, int size){
     int array_size = size * size;
-    thrust::sort(thrust::seq, window, window + array_size);
+    thrust::sort(thrust::device, window, window + array_size);
     //Using pair to meeet requirements, min_val will be unused
     T min_val = window[0];
     if (array_size % 2 == 1)
@@ -135,15 +135,23 @@ __device__ thrust::pair<float, T> thrust_median(T *window, int size){
     return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f, min_val);
 }
 
+__device__ float fast_median(unsigned char *window){
+    constexpr int array_size = 25;
+    thrust::sort(thrust::device, window, window + array_size);
+    if (array_size % 2 == 1)
+        return window[array_size / 2]/1.0f;
+    return (window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f;
+}
+
 //For further testing
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
-    int col = blockIdx.x +blockDim.x * threadIdx.x;
-    int row = blockIdx.y +blockDim.y * threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
     const int offset = blur_size / 2;
 
     if(col<width && row<height){
         for(int c=0; c<channels; ++c){
-            unsigned char window[25]; //Window = pixels to calculate median from
+            unsigned char window[1024]; //Window = pixels to calculate median from
             int counter = 0; //For indexing in window
             //Collect pixels in the window
             for(int y = 0; y < blur_size; ++y){
@@ -168,9 +176,10 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                 }
             }
             //Compute median
-            thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
+            //thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
             //Same here with the indexing
-            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
+            //out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
+            out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
         }
     }
 }
