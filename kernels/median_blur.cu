@@ -16,9 +16,7 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 
-//#include "bits/stdc++.h"
-
-//#include "nvtx3.hpp"
+#include "nvtx3.hpp"
 #define NOMINMAX
 
 #include "utils.cuh"
@@ -26,21 +24,21 @@
 /*
 TODO:
 
-Modern c++ (Choose 2): DONE
--Templates
+Modern c++ (Choose 2): - DONE
+-Templates - DONE (template <typename T>)
 -Iterators
--Containers - DONE
--Functions - DONE
+-Containers
+-Functors
 -Operator Overloading
--Lambda Expressions
+-Lambda Expressions - DONE (getOffset)
 -Type Aliases
 
 Thrust (One of each type):
 -Fancy iterators - TODO
--Vocabulary types - TODO
--Execution policies - DONE
+-Vocabulary types - DONE (pair)
+-Execution policies - DONE (thrust::device)
 -Execution space specifier - TODO
--Thrust alghorithms - DONE
+-Thrust alghorithms - DONE (thrust::sort)
 
 Async, CUB, Nvidia tools (Minimum 2):
 -Async elements
@@ -135,19 +133,21 @@ __device__ thrust::pair<float, T> thrust_median(T *window, int size){
     return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f, min_val);
 }
 
-__device__ float fast_median(unsigned char *window){
+/*__device__ float fast_median(unsigned char *window){
     constexpr int array_size = 25;
     thrust::sort(thrust::device, window, window + array_size);
     if (array_size % 2 == 1)
         return window[array_size / 2]/1.0f;
     return (window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f;
-}
+}*/
+__global__
 
 //For further testing
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     const int offset = blur_size / 2;
+    auto getOffset = [](int a, int b, int offset) {return a + b - offset;};
 
     if(col<width && row<height){
         for(int c=0; c<channels; ++c){
@@ -165,8 +165,8 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                     //y = 0 -> row - 1
                     //y = 1 -> row + 0
                     //Same for x
-                    int curRow = row + y - offset;
-                    int curCol = col + x - offset;
+                    int curRow = getOffset(row,y,offset);
+                    int curCol = getOffset(col,x,offset);
                     //Check bounds
                     if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
                         //Indexing like this because input is R,G,B,R,G,B,... etc.
@@ -176,10 +176,10 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                 }
             }
             //Compute median
-            //thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
+            thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
             //Same here with the indexing
-            //out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
-            out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
+            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
+            //out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
         }
     }
 }
@@ -194,8 +194,6 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
 
     dim3 dimBlock = getOptimalBlockDim(width, height);
     dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y));
-
-
 
     auto result = torch::empty({height, width, channels},
                               torch::TensorOptions().dtype(torch::kByte).device(img.device()));
