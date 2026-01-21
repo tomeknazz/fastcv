@@ -15,6 +15,7 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <cub/cub.cuh>
 
 #include "nvtx3.hpp"
 #define NOMINMAX
@@ -25,7 +26,7 @@
 TODO:
 
 Modern c++ (Choose 2): - DONE
--Templates - DONE (template <typename T>)
+-Templates
 -Iterators
 -Containers
 -Functors
@@ -35,10 +36,10 @@ Modern c++ (Choose 2): - DONE
 
 Thrust (One of each type):
 -Fancy iterators - TODO
--Vocabulary types - DONE (pair)
--Execution policies - DONE (thrust::device)
+-Vocabulary types - TODO
+-Execution policies - TODO
 -Execution space specifier - TODO
--Thrust alghorithms - DONE (thrust::sort)
+-Thrust alghorithms - TDOD
 
 Async, CUB, Nvidia tools (Minimum 2):
 -Async elements
@@ -54,8 +55,8 @@ Obligatory:
 -Nvidia tools extension NVTX
 
 CUDA kenel:
--Has to use grid,block,thread indexing
--optimal block size calculation
+-Has to use grid,block,thread indexing - DONE
+-optimal block size calculation - DONE
 -uses atomic operations if necessary
 -shows thread synchronisation
 -uses streaming multiprocessor efficiently
@@ -63,140 +64,110 @@ CUDA kenel:
 
 */
 
-/*
-__device__ int partition(int arr[], int low, int high) {
-    int pivot = arr[high];
-    int i = (low - 1);
-    int temp = 0;
-    for (int j = low; j <= high - 1; j++) {
-        if (arr[j] <= pivot) {
-            i++;
-            temp = arr[i] ;
-            arr[i] = arr[j];
-            arr[j] = temp;
-        }
-    }
-    temp = arr[i+1] ;
-    arr[i+1] = arr[high];
-    arr[high] = temp;
-    return (i + 1);
-}
-__device__ void quickSort(int arr[], int low, int high) {
-    if (low < high) {
-        int pi = partition(arr, low, high);
-        quickSort(arr, low, pi - 1);
-        quickSort(arr, pi + 1, high);
-    }
-}
-__device__ int median(int arr[], int size){
-    //int size = sizeof(arr) / sizeof(int);
-    quickSort(arr, 0, size - 1);
-    if (size % 2 == 1)
-        return arr[size / 2];
 
-    return int((arr[size / 2 - 1] + arr[size / 2]) / 2);
-}
-
-//Less accurate median
-//For further testing
-int fast_median(thrust::device_vector<int> &window){
-    thrust::sort(window.begin(), window.end());
-    return window[window.size() / 2];
-}
-
-//For further testing
-__device__ float median(thrust::device_vector<float> &window){
-    thrust::sort(window.begin(), window.end());
-    int size = window.size();
-    if (size % 2 == 1)
-        return window[size / 2];
-
-    return (window[size / 2 - 1] + window[size / 2]) / 2.0f;
-}
-
-//Could do version that takes &window to avoid copying
-//Maybe todo later
-
-*/
 //Using templates to meet requirements
 //Maybe for adptive median blur later???
 //This compiles with no problems
 template <typename T>
-__device__ thrust::pair<float, T> thrust_median(T *window, int size){
-    int array_size = size * size;
+__device__ thrust::pair<int, T> thrust_median(T *window, int count){
+    int array_size = count;
     thrust::sort(thrust::device, window, window + array_size);
     //Using pair to meeet requirements, min_val will be unused
     T min_val = window[0];
     if (array_size % 2 == 1)
-        return thrust::make_pair(window[array_size / 2]/1.0f, min_val/1.0f);
+        return thrust::make_pair(window[array_size / 2], min_val);
 
-    return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f, min_val);
+    return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2, min_val);
 }
-
-/*__device__ float fast_median(unsigned char *window){
-    constexpr int array_size = 25;
-    thrust::sort(thrust::device, window, window + array_size);
-    if (array_size % 2 == 1)
-        return window[array_size / 2]/1.0f;
-    return (window[array_size / 2 - 1] + window[array_size / 2]) / 2.0f;
-}*/
-__global__
+__device__ void bubbleSort(unsigned char* arr, int n) {
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = 0; j < n - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                unsigned char temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
 
 //For further testing
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
+     //Using z dimension for channel
+    int channel = blockIdx.z;
+
     const int offset = blur_size / 2;
     auto getOffset = [](int a, int b, int offset) {return a + b - offset;};
+    //Shared memory allocation
+    // int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
+    extern __shared__ unsigned char shared_memory[];
+    //Loading into shared memory
+    for(int i=threadIdx.y*blockDim.x+threadIdx.x; i<(blockDim.x + blur_size)*(blockDim.y + blur_size); i+=blockDim.x*blockDim.y){
+        int shared_row = i / (blockDim.x + blur_size);
+        int shared_col = i % (blockDim.x + blur_size);
+        int global_row = blockIdx.y * blockDim.y + shared_row - offset;
+        int global_col = blockIdx.x * blockDim.x + shared_col - offset;
+        global_row=max(0, min(global_row, height - 1));
+        global_col=max(0, min(global_col, width - 1));
+        shared_memory[i] = in[(global_row * width + global_col) * channels + channel];
+    }
+
+    __syncthreads(); //Ensure all data is loaded
 
     if(col<width && row<height){
-        for(int c=0; c<channels; ++c){
-            unsigned char window[1024]; //Window = pixels to calculate median from
+            unsigned char window[121]; //Window = pixels to calculate median from
             int counter = 0; //For indexing in window
             //Collect pixels in the window
             for(int y = 0; y < blur_size; ++y){
                 for(int x = 0; x < blur_size; ++x){
+                    //Using shared memory here
+                    int shared_memory_index = (threadIdx.y + y) * (blockDim.x + blur_size) + (threadIdx.x + x);
+                    window[counter++]= shared_memory[shared_memory_index];
                     //This makes sure we are centered around the pixel
                     //For example for blur_size = 3, offset = 1
-                    //y = 0 -> row - 1
-                    //y = 1 -> row + 0
-                    //y = 2 -> row + 1
+                    //y = 0 -- row - 1
+                    //y = 1 -- row + 0
+                    //y = 2 -- row + 1
                     //And for blur_size = 2
-                    //y = 0 -> row - 1
-                    //y = 1 -> row + 0
+                    //y = 0 -- row - 1
+                    //y = 1 -- row + 0
                     //Same for x
-                    int curRow = getOffset(row,y,offset);
-                    int curCol = getOffset(col,x,offset);
+                    //int curRow = getOffset(row,y,offset);
+                    //int curCol = getOffset(col,x,offset);
                     //Check bounds
-                    if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
+                    //if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
                         //Indexing like this because input is R,G,B,R,G,B,... etc.
                         //We only want one channel at a time
-                        window[counter++]= in[(curRow * width + curCol) * channels + c];
-                    }
+                        //window[counter++]= in[(curRow * width + curCol) * channels + channel];
+                    //}
                 }
             }
             //Compute median
-            thrust::pair<float, unsigned char> med = thrust_median<unsigned char>(window, blur_size);
-            //Same here with the indexing
-            out[(row * width + col) * channels + c] = static_cast<unsigned char>(med.first);
+            //thrust::pair<int, unsigned char> med = thrust_median<unsigned char>(window, counter);
+            bubbleSort(window, counter);
+            out[(row * width + col) * channels + channel] = window[counter / 2];
+            //Same here with the indexi
+            //out[(row * width + col) * channels + channel] = static_cast<unsigned char>(med.first);
             //out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
-        }
     }
 }
 
 torch::Tensor median_blur(torch::Tensor img, int blur_size){
     assert(img.device().type() == torch::kCUDA);
     assert(img.dtype() == torch::kByte);
-
+    //We can add thrust::pair here
     const auto height = img.size(0);
     const auto width = img.size(1);
     const auto channels = img.size(2);
 
     dim3 dimBlock = getOptimalBlockDim(width, height);
-    dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y));
+    //Added channels to make use of parallelism
+    //We can process multiple channels at the same time
+    dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y),channels);
 
-    auto result = torch::empty({height, width, channels},
-                              torch::TensorOptions().dtype(torch::kByte).device(img.device()));
+    auto result = torch::empty_like(img);
 
     unsigned char* in_ptr = img.data_ptr<unsigned char>();
     unsigned char* out_ptr = result.data_ptr<unsigned char>();
@@ -205,7 +176,10 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     thrust::device_ptr<unsigned char> thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
     thrust::device_ptr<unsigned char> thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
 
-    medianBlurKernel<<<dimGrid, dimBlock, 0, at::cuda::getCurrentCUDAStream()>>>(
+    //Memory size has to be here to compile correctly
+    int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
+
+    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
         thrust_in_ptr.get(),
         thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
