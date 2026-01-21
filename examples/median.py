@@ -4,10 +4,10 @@ import fastcv
 import time
 
 img = cv2.imread("../artifacts/test.jpg")
-img_tensor = torch.from_numpy(img).cuda()
 t1=time.time()
+img_tensor = torch.from_numpy(img).cpu()
 median_tensor = fastcv.median_blur(img_tensor, 5)
-median_np = median_tensor.squeeze(-1).cpu().numpy()
+median_np = median_tensor.squeeze(-1).numpy()
 cv2.imwrite("output_median.jpg", median_np)
 t2=time.time()
 print(f"median blur time CUDA: {t2-t1} seconds")

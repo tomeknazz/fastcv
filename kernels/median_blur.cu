@@ -25,60 +25,45 @@
 /*
 TODO:
 
-Modern c++ (Choose 2): - DONE
+Modern c++ (Choose 2): -> DONE
 -Templates
 -Iterators
--Containers
+-Containers - DONE -> thrust::device_vector
 -Functors
 -Operator Overloading
--Lambda Expressions - DONE (getOffset)
--Type Aliases
+-Lambda Expressions - DONE -> getOffset
+-Type Aliases - DONE -> using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
 
 Thrust (One of each type):
 -Fancy iterators - TODO
--Vocabulary types - TODO
+-Vocabulary types - DONE -> thrust::pair
 -Execution policies - TODO
--Execution space specifier - TODO
--Thrust alghorithms - TDOD
+-Execution space specifier - DONE -> __device__
+-Thrust alghorithms - DONE - DONE -> thrust::copy
 
-Async, CUB, Nvidia tools (Minimum 2):
--Async elements
+Async, CUB, Nvidia tools (Minimum 2): -> DONE
+-Async elements - DONE
 -Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize
--Compute IO overlap
+-cudaDeviceSynchronize - DONE
+-Compute IO overlap - DONE
 -Copy compute overlap
--Cuda streams
--Pinned memory
--cudaMemcpyAsync
+-Cuda streams - DONE
+-Pinned memory - DONE
+-cudaMemcpyAsync - DONE
 Obligatory:
--Nsight analysis
--Nvidia tools extension NVTX
+-Nsight analysis - TODO
+-Nvidia tools extension NVTX - TODO
 
 CUDA kenel:
--Has to use grid,block,thread indexing - DONE
--optimal block size calculation - DONE
+-Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
+-optimal block size calculation - DONE -> getOptimalBlockDim
 -uses atomic operations if necessary
--shows thread synchronisation
--uses streaming multiprocessor efficiently
--uses shared and global memory
+-shows thread synchronisation - DONE -> __syncthreads()
+-uses streaming multiprocessor efficiently - DONE
+-uses shared and global memory - DONE -> __shared__
 
 */
 
-
-//Using templates to meet requirements
-//Maybe for adptive median blur later???
-//This compiles with no problems
-template <typename T>
-__device__ thrust::pair<int, T> thrust_median(T *window, int count){
-    int array_size = count;
-    thrust::sort(thrust::device, window, window + array_size);
-    //Using pair to meeet requirements, min_val will be unused
-    T min_val = window[0];
-    if (array_size % 2 == 1)
-        return thrust::make_pair(window[array_size / 2], min_val);
-
-    return thrust::make_pair((window[array_size / 2 - 1] + window[array_size / 2]) / 2, min_val);
-}
 __device__ void bubbleSort(unsigned char* arr, int n) {
     for (int i = 0; i < n - 1; i++) {
         for (int j = 0; j < n - i - 1; j++) {
@@ -153,37 +138,84 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
             //out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
     }
 }
+//Namespace for requirement
+using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
 
 torch::Tensor median_blur(torch::Tensor img, int blur_size){
-    assert(img.device().type() == torch::kCUDA);
+    //NVTX3_FUNC_RANGE();
+    //Make sure input is correct
+    assert(img.device().type() == torch::kCPU);
     assert(img.dtype() == torch::kByte);
-    //We can add thrust::pair here
     const auto height = img.size(0);
     const auto width = img.size(1);
-    const auto channels = img.size(2);
+    //Using thrust::pair for dimensions
 
+    const auto channels = img.size(2);
+    const int pinned_vector_size = height * width * channels;
+
+    unsigned char* host_in_ptr = nullptr;
+    //Allocate pinned memory
+    cudaMallocHost((void**)&host_in_ptr, pinned_vector_size * sizeof(unsigned char));
+    //Copy to pinned memory
+    unsigned char* img_ptr = img.data_ptr<unsigned char>();
+    thrust::copy(img_ptr, img_ptr + pinned_vector_size, host_in_ptr);
+
+    auto in_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
+    auto result = torch::empty_like(in_tensor);
+    //unsigned char* out_ptr = result.data_ptr<unsigned char>();
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    cudaMemcpyAsync(
+        in_tensor.data_ptr<unsigned char>(),
+        host_in_ptr,
+        pinned_vector_size * sizeof(unsigned char),
+        cudaMemcpyHostToDevice,
+        stream
+    );
+
+    unsigned char* in_ptr = in_tensor.data_ptr<unsigned char>();
+    unsigned char* out_ptr = result.data_ptr<unsigned char>();
+
+    auto dimensions = thrust::make_pair(height, width);
     dim3 dimBlock = getOptimalBlockDim(width, height);
     //Added channels to make use of parallelism
     //We can process multiple channels at the same time
-    dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y),channels);
-
-    auto result = torch::empty_like(img);
-
-    unsigned char* in_ptr = img.data_ptr<unsigned char>();
-    unsigned char* out_ptr = result.data_ptr<unsigned char>();
-
+    dim3 dimGrid(cdiv(dimensions.second, dimBlock.x), cdiv(dimensions.first, dimBlock.y),channels);
     //Using thrust:device_ptr to meet the requirement
-    thrust::device_ptr<unsigned char> thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
-    thrust::device_ptr<unsigned char> thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+    thrust_device_uchar_ptr thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
+    thrust_device_uchar_ptr thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
 
     //Memory size has to be here to compile correctly
     int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
-
+    //Kernel execution
     medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
         thrust_in_ptr.get(),
         thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    return result;
+    //Create pinned memory for output
+    unsigned char* host_result_ptr = nullptr;
+    //Allocate pinned memory
+    cudaMallocHost((void**)&host_result_ptr, pinned_vector_size * sizeof(unsigned char));
+    //Async copy
+    cudaMemcpyAsync(
+        host_result_ptr,
+        out_ptr,
+        pinned_vector_size * sizeof(unsigned char),
+        cudaMemcpyDeviceToHost,
+        stream
+    );
+    //Create cpu tensor for result because otherwise we will have to copy again on python side
+    auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
+    unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
+    //Synchronisation and free allocated memory
+    cudaStreamSynchronize(stream);
+    //Copy from pinned memory to cpu tensor
+    thrust::copy(host_result_ptr, host_result_ptr + pinned_vector_size, result_cpu_ptr);
+    cudaFreeHost(host_result_ptr);
+    cudaFreeHost(host_in_ptr);
+
+    return result_cpu_tensor;
 }
