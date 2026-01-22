@@ -16,6 +16,7 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <cub/cub.cuh>
+#include <time.h>
 
 #include "nvtx3.hpp"
 #define NOMINMAX
@@ -64,17 +65,18 @@ CUDA kenel:
 
 */
 
-__device__ void bubbleSort(unsigned char* arr, int n) {
-    for (int i = 0; i < n - 1; i++) {
-        for (int j = 0; j < n - i - 1; j++) {
-            if (arr[j] > arr[j + 1]) {
-                unsigned char temp = arr[j];
-                arr[j] = arr[j + 1];
-                arr[j + 1] = temp;
-            }
+__device__ void insertionSort(unsigned char* arr, int n) {
+    for (int i = 1; i < n; ++i) {
+        unsigned char key = arr[i];
+        int j = i - 1;
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j = j - 1;
         }
+        arr[j + 1] = key;
     }
 }
+
 
 //For further testing
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
@@ -110,32 +112,11 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                     //Using shared memory here
                     int shared_memory_index = (threadIdx.y + y) * (blockDim.x + blur_size) + (threadIdx.x + x);
                     window[counter++]= shared_memory[shared_memory_index];
-                    //This makes sure we are centered around the pixel
-                    //For example for blur_size = 3, offset = 1
-                    //y = 0 -- row - 1
-                    //y = 1 -- row + 0
-                    //y = 2 -- row + 1
-                    //And for blur_size = 2
-                    //y = 0 -- row - 1
-                    //y = 1 -- row + 0
-                    //Same for x
-                    //int curRow = getOffset(row,y,offset);
-                    //int curCol = getOffset(col,x,offset);
-                    //Check bounds
-                    //if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
-                        //Indexing like this because input is R,G,B,R,G,B,... etc.
-                        //We only want one channel at a time
-                        //window[counter++]= in[(curRow * width + curCol) * channels + channel];
-                    //}
                 }
             }
             //Compute median
-            //thrust::pair<int, unsigned char> med = thrust_median<unsigned char>(window, counter);
-            bubbleSort(window, counter);
+            insertionSort(window, counter);
             out[(row * width + col) * channels + channel] = window[counter / 2];
-            //Same here with the indexi
-            //out[(row * width + col) * channels + channel] = static_cast<unsigned char>(med.first);
-            //out[(row * width + col) * channels + c] = static_cast<unsigned char>(fast_median(window));
     }
 }
 //Namespace for requirement
@@ -165,7 +146,7 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     //unsigned char* out_ptr = result.data_ptr<unsigned char>();
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-
+    clock_t start = clock();
     cudaMemcpyAsync(
         in_tensor.data_ptr<unsigned char>(),
         host_in_ptr,
@@ -189,7 +170,8 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     //Memory size has to be here to compile correctly
     int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
     //Kernel execution
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
+
+    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, stream>>>(
         thrust_in_ptr.get(),
         thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
@@ -212,6 +194,10 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
     //Synchronisation and free allocated memory
     cudaStreamSynchronize(stream);
+    clock_t end = clock();
+
+    double time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+    printf("Median time used: %f seconds\n", time_used);
     //Copy from pinned memory to cpu tensor
     thrust::copy(host_result_ptr, host_result_ptr + pinned_vector_size, result_cpu_ptr);
     cudaFreeHost(host_result_ptr);
