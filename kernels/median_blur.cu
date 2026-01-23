@@ -16,6 +16,7 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <cub/cub.cuh>
+#include <time.h>
 
 #include "nvtx3.hpp"
 #define NOMINMAX
@@ -139,13 +140,12 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     unsigned char* in_ptr = in_tensor.data_ptr<unsigned char>();
     unsigned char* out_ptr = result.data_ptr<unsigned char>();
 
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(
         in_ptr,
         img_ptr,
         vector_size * sizeof(unsigned char),
         cudaMemcpyHostToDevice,
-        stream
+        at::cuda::getCurrentCUDAStream()
     );
     nvtxRangePop(); //Memory allocation
 
@@ -165,17 +165,17 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     nvtxRangePop(); //Pre kernel setup
     //Kernel execution
     nvtxRangePushA("Kernel execution");
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, stream>>>(
+    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
         thrust_in_ptr.get(),
         thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     nvtxRangePop(); //Kernel execution
-    nvtxRangePushA("Copy back to CPU");
+    //nvtxRangePushA("Copy back to CPU");
 
 
     //Create cpu tensor for result because otherwise we will have to copy again on python side
-    auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
+    /*auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
     //auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte).pinned_memory(true));
     unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
     cudaMemcpyAsync(
@@ -187,8 +187,9 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     );
     //Synchronisation and free allocated memory
     cudaStreamSynchronize(stream);
-    nvtxRangePop(); //Copy back to CPU
+    */
+    //nvtxRangePop(); //Copy back to CPU
     nvtxRangePop(); //Median Blur End
 
-    return result_cpu_tensor;
+    return result;
 }
