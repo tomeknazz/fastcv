@@ -131,6 +131,9 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     const auto width = img.size(1);
     const auto channels = img.size(2);
     const int vector_size = height * width * channels;
+    //Defining stream count and segment height for splitting image into separete streams
+    const int stream_count = 8;
+    int segment_height = height / stream_count;
 
     nvtxRangePushA("Memory allocation");
     auto in_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
@@ -138,57 +141,82 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     unsigned char* img_ptr = img.data_ptr<unsigned char>();
     unsigned char* in_ptr = in_tensor.data_ptr<unsigned char>();
     unsigned char* out_ptr = result.data_ptr<unsigned char>();
+    auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
+    unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
 
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(
-        in_ptr,
-        img_ptr,
-        vector_size * sizeof(unsigned char),
-        cudaMemcpyHostToDevice,
-        stream
-    );
+    cudaStream_t streams[stream_count];
+    for(int i=0; i<stream_count; i++){
+        cudaStreamCreate(&streams[i]);
+    }
     nvtxRangePop(); //Memory allocation
 
-    nvtxRangePushA("Pre kernel setup");
-    //Using thrust::pair for dimensions
-    auto dimensions = thrust::make_pair(height, width);
-    dim3 dimBlock = getOptimalBlockDim(width, height);
-    //Added channels to make use of parallelism
-    //We can process multiple channels at the same time
-    dim3 dimGrid(cdiv(dimensions.second, dimBlock.x), cdiv(dimensions.first, dimBlock.y),channels);
-    //Using thrust:device_ptr to meet the requirement
-    thrust_device_uchar_ptr thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
-    thrust_device_uchar_ptr thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+    for(int i=0; i<stream_count; ++i){
+        int y_start = i * segment_height;
+        // Obsługa ostatniego segmentu (reszta z dzielenia)
+        int current_segment_height = (i == stream_count - 1) ? (height - y_start) : segment_height;
+        int segment_size = current_segment_height * width * channels * sizeof(unsigned char);
+        int offset = y_start * width * channels;
 
-    //Memory size has to be here to compile correctly
-    int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
-    nvtxRangePop(); //Pre kernel setup
-    //Kernel execution
-    nvtxRangePushA("Kernel execution");
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, stream>>>(
-        thrust_in_ptr.get(),
-        thrust_out_ptr.get(),
-        width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-    nvtxRangePop(); //Kernel execution
-    nvtxRangePushA("Copy back to CPU");
+        cudaMemcpyAsync(
+            in_ptr + offset,
+            img_ptr + offset,
+            segment_size,
+            cudaMemcpyHostToDevice,
+            streams[i]
+        );
+    }
 
+    // ---------------------------------------------------------
+    // ETAP 2: Zlecenie wszystkich KERNELI
+    // ---------------------------------------------------------
+    // GPU może zacząć liczyć Kernel 0, podczas gdy Copy Engine wciąż mieli Copy 1, 2, 3...
+    for(int i=0; i<stream_count; ++i){
+        int y_start = i * segment_height;
+        int current_segment_height = (i == stream_count - 1) ? (height - y_start) : segment_height;
+        int offset = y_start * width * channels;
+        int segment_elements = current_segment_height * width * channels; // do debugowania
 
-    //Create cpu tensor for result because otherwise we will have to copy again on python side
-    auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
-    //auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte).pinned_memory(true));
-    unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
-    cudaMemcpyAsync(
-        result_cpu_ptr,
-        out_ptr,
-        vector_size * sizeof(unsigned char),
-        cudaMemcpyDeviceToHost,
-        stream
-    );
-    //Synchronisation and free allocated memory
-    cudaStreamSynchronize(stream);
-    nvtxRangePop(); //Copy back to CPU
+        auto dimensions = thrust::make_pair(current_segment_height, width);
+        dim3 dimBlock = getOptimalBlockDim(width, dimensions.first);
+        dim3 dimGrid(cdiv(dimensions.second, dimBlock.x), cdiv(dimensions.first, dimBlock.y), channels);
+        int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size) * sizeof(unsigned char);
+
+        thrust_device_uchar_ptr thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
+        thrust_device_uchar_ptr thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+
+        medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, streams[i]>>>(
+            thrust_in_ptr.get() + offset,
+            thrust_out_ptr.get() + offset,
+            dimensions.second, dimensions.first, channels, blur_size
+        );
+    }
+
+    // ---------------------------------------------------------
+    // ETAP 3: Zlecenie wszystkich transferów DEVICE -> HOST
+    // ---------------------------------------------------------
+    for(int i=0; i<stream_count; ++i){
+        int y_start = i * segment_height;
+        int current_segment_height = (i == stream_count - 1) ? (height - y_start) : segment_height;
+        int segment_size = current_segment_height * width * channels * sizeof(unsigned char);
+        int offset = y_start * width * channels;
+
+        cudaMemcpyAsync(
+            result_cpu_ptr + offset,
+            out_ptr + offset,
+            segment_size,
+            cudaMemcpyDeviceToHost,
+            streams[i]
+        );
+    }
+
+    //Synchronize all streams
+    for(int i=0; i<stream_count; i++){
+        cudaStreamSynchronize(streams[i]);
+        cudaStreamDestroy(streams[i]);
+    }
     nvtxRangePop(); //Median Blur End
+
+
 
     return result_cpu_tensor;
 }
