@@ -25,6 +25,7 @@
 
 /*
 TODO:
+WRITE COMMENTS - @phiphi
 
 Modern c++ (Choose 2): -> DONE
 -Templates
@@ -40,20 +41,20 @@ Thrust (One of each type):
 -Vocabulary types - DONE -> thrust::pair
 -Execution policies - TODO
 -Execution space specifier - DONE -> __device__
--Thrust alghorithms - DONE - DONE -> thrust::copy
+-Thrust alghorithms - TODO
 
 Async, CUB, Nvidia tools (Minimum 2): -> DONE
 -Async elements - DONE
 -Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize - DONE
--Compute IO overlap - DONE
--Copy compute overlap
--Cuda streams - DONE
--Pinned memory
--cudaMemcpyAsync - DONE
+-cudaDeviceSynchronize
+-Compute IO overlap
+-Copy compute overlap - DONE
+-Cuda streams - DONE?
+-Pinned memory - DONE (python)
+-cudaMemcpyAsync
 Obligatory:
--Nsight analysis - TODO
--Nvidia tools extension NVTX - TODO
+-Nsight analysis - DONE
+-Nvidia tools extension NVTX - DONE
 
 CUDA kenel: -> DONE
 -Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
@@ -171,24 +172,6 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     nvtxRangePop(); //Kernel execution
-    //nvtxRangePushA("Copy back to CPU");
-
-
-    //Create cpu tensor for result because otherwise we will have to copy again on python side
-    /*auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte));
-    //auto result_cpu_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kByte).pinned_memory(true));
-    unsigned char* result_cpu_ptr = result_cpu_tensor.data_ptr<unsigned char>();
-    cudaMemcpyAsync(
-        result_cpu_ptr,
-        out_ptr,
-        vector_size * sizeof(unsigned char),
-        cudaMemcpyDeviceToHost,
-        stream
-    );
-    //Synchronisation and free allocated memory
-    cudaStreamSynchronize(stream);
-    */
-    //nvtxRangePop(); //Copy back to CPU
     nvtxRangePop(); //Median Blur End
 
     return result;

@@ -14,7 +14,6 @@ def benchmark_blur(sizes=[1024, 2048, 4096], runs=100):
 
         img_np = np.random.randint(0, 256, (size, size, 3), dtype=np.uint8)
         img_torch = torch.from_numpy(img_np).pin_memory()
-        #img_torch = img_torch.pin_memory()
         _ = fastcv.median_blur(img_torch, 5)
         start = time.perf_counter()
         for _ in range(runs):
