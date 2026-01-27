@@ -68,7 +68,7 @@ CUDA kenel: -> DONE
 
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
-__device__ unsigned char sorting_network25(unsigned char* window){
+__device__ unsigned char sorting_network25_noshared(unsigned char* window){
 
     unsigned char p0 = window[0];
     unsigned char p1 = window[1];
@@ -124,7 +124,7 @@ __device__ unsigned char sorting_network25(unsigned char* window){
 
 }
 
-__device__ unsigned char sorting_network9(unsigned char* window){
+__device__ unsigned char sorting_network9_noshared(unsigned char* window){
 
     unsigned char w0=window[0];
     unsigned char w1=window[1];
@@ -147,95 +147,81 @@ __device__ unsigned char sorting_network9(unsigned char* window){
 
 }
 
+
 //For further testing
-__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
+__global__ void medianBlurKernel_simple_noshared(unsigned char* in, unsigned char* out,int width, int height,int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
      //Using z dimension for channel
-    int channel = blockIdx.z;
 
     const int offset = blur_size / 2;
     //auto getOffset = [](int a, int b, int offset) {return a + b - offset;};
-    //Shared memory allocation
-    // int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
-    extern __shared__ unsigned char shared_memory[];
-    //Loading into shared memory
-    for(int i=threadIdx.y*blockDim.x+threadIdx.x; i<(blockDim.x + blur_size)*(blockDim.y + blur_size); i+=blockDim.x*blockDim.y){
-        int shared_row = i / (blockDim.x + blur_size);
-        int shared_col = i % (blockDim.x + blur_size);
-        int global_row = blockIdx.y * blockDim.y + shared_row - offset;
-        int global_col = blockIdx.x * blockDim.x + shared_col - offset;
-        //Ensure we don't go out of bounds
-        global_row=max(0, min(global_row, height - 1));
-        global_col=max(0, min(global_col, width - 1));
-        shared_memory[i] = in[(global_row * width + global_col) * channels + channel];
-    }
 
-    __syncthreads(); //Ensure all data is loaded
+
     if(col<width && row<height){
+        for(int c=0; c<channels; ++c){
             unsigned char window[25]; //Window = pixels to calculate median from
             int counter = 0; //For indexing in window
             //Collect pixels in the window
             for(int y = 0; y < blur_size; ++y){
                 for(int x = 0; x < blur_size; ++x){
-                    //Using shared memory here
-                    int shared_memory_index = (threadIdx.y + y) * (blockDim.x + blur_size) + (threadIdx.x + x);
-                    window[counter++]= shared_memory[shared_memory_index];
+                    //This makes sure we are centered around the pixel
+                    //For example for blur_size = 3, offset = 1
+                    //y = 0 -> row - 1
+                    //y = 1 -> row + 0
+                    //y = 2 -> row + 1
+                    //And for blur_size = 2
+                    //y = 0 -> row - 1
+                    //y = 1 -> row + 0
+                    //Same for x
+                    int curRow = row + y - offset;
+                    int curCol = col + x - offset;
+                    //Check bounds
+                    if(curRow >= 0 && curRow < height && curCol >= 0 && curCol < width){
+                        //Indexing like this because input is R,G,B,R,G,B,... etc.
+                        //We only want one channel at a time
+                        window[counter++]= in[(curRow * width + curCol) * channels + c];
+                    }
                 }
             }
             //Compute median
-            out[(row * width + col) * channels + channel] = sorting_network25(window);
+            out[(row * width + col) * channels + c] = sorting_network25_noshared(window);
+        }
     }
 }
-//Namespace for requirement
-using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
 
-torch::Tensor median_blur(torch::Tensor img, int blur_size){
+torch::Tensor median_blur_simple_noshared(torch::Tensor img, int blur_size){
     nvtxRangePushA("Median Blur Start");
     //Make sure input is correct
-    assert(img.device().type() == torch::kCPU);
+    assert(img.device().type() == torch::kCUDA);
     assert(img.dtype() == torch::kByte);
-    const auto height = img.size(0);
-    const auto width = img.size(1);
-    const auto channels = img.size(2);
-    const int vector_size = height * width * channels;
+    const int height = img.size(0);
+    const int width = img.size(1);
+    const int channels = img.size(2);
 
     nvtxRangePushA("Memory allocation");
-    auto in_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
-    auto result = torch::empty_like(in_tensor);
+    torch::Tensor result = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
     unsigned char* img_ptr = img.data_ptr<unsigned char>();
-    unsigned char* in_ptr = in_tensor.data_ptr<unsigned char>();
     unsigned char* out_ptr = result.data_ptr<unsigned char>();
 
-    cudaMemcpyAsync(
-        in_ptr,
-        img_ptr,
-        vector_size * sizeof(unsigned char),
-        cudaMemcpyHostToDevice,
-        at::cuda::getCurrentCUDAStream()
-    );
     nvtxRangePop(); //Memory allocation
 
     nvtxRangePushA("Pre kernel setup");
     //Using thrust::pair for dimensions
-    auto dimensions = thrust::make_pair(height, width);
     dim3 dimBlock = getOptimalBlockDim(width, height);
     //Added channels to make use of parallelism
     //We can process multiple channels at the same time
-    dim3 dimGrid(cdiv(dimensions.second, dimBlock.x), cdiv(dimensions.first, dimBlock.y),channels);
-    //Using thrust:device_ptr to meet the requirement
-    thrust_device_uchar_ptr thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
-    thrust_device_uchar_ptr thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+    dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y));
 
-    //Memory size has to be here to compile correctly
-    int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
+
+
     nvtxRangePop(); //Pre kernel setup
     //Kernel execution
     nvtxRangePushA("Kernel execution");
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
-        thrust_in_ptr.get(),
-        thrust_out_ptr.get(),
-        width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
+    medianBlurKernel_simple_noshared<<<dimGrid, dimBlock, 0, at::cuda::getCurrentCUDAStream()>>>(
+        img_ptr,
+        out_ptr,
+        width, height,channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     nvtxRangePop(); //Kernel execution
     nvtxRangePop(); //Median Blur End

@@ -68,7 +68,7 @@ CUDA kenel: -> DONE
 
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
-__device__ unsigned char sorting_network25(unsigned char* window){
+__device__ unsigned char sorting_network25_simple(unsigned char* window){
 
     unsigned char p0 = window[0];
     unsigned char p1 = window[1];
@@ -124,7 +124,8 @@ __device__ unsigned char sorting_network25(unsigned char* window){
 
 }
 
-__device__ unsigned char sorting_network9(unsigned char* window){
+__device__ unsigned char sorting_network9_simple(unsigned char* window){
+
 
     unsigned char w0=window[0];
     unsigned char w1=window[1];
@@ -148,7 +149,7 @@ __device__ unsigned char sorting_network9(unsigned char* window){
 }
 
 //For further testing
-__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
+__global__ void medianBlurKernel_simple(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
      //Using z dimension for channel
@@ -172,6 +173,7 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
     }
 
     __syncthreads(); //Ensure all data is loaded
+
     if(col<width && row<height){
             unsigned char window[25]; //Window = pixels to calculate median from
             int counter = 0; //For indexing in window
@@ -184,57 +186,40 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                 }
             }
             //Compute median
-            out[(row * width + col) * channels + channel] = sorting_network25(window);
+            //insertionSort_simple(window, counter);
+
+            out[(row * width + col) * channels + channel] = sorting_network25_simple(window);
     }
 }
-//Namespace for requirement
-using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
 
-torch::Tensor median_blur(torch::Tensor img, int blur_size){
+torch::Tensor median_blur_simple(torch::Tensor img, int blur_size){
     nvtxRangePushA("Median Blur Start");
     //Make sure input is correct
-    assert(img.device().type() == torch::kCPU);
-    assert(img.dtype() == torch::kByte);
-    const auto height = img.size(0);
-    const auto width = img.size(1);
-    const auto channels = img.size(2);
-    const int vector_size = height * width * channels;
+    const int height = img.size(0);
+    const int width = img.size(1);
+    const int channels = img.size(2);
 
     nvtxRangePushA("Memory allocation");
-    auto in_tensor = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
-    auto result = torch::empty_like(in_tensor);
-    unsigned char* img_ptr = img.data_ptr<unsigned char>();
-    unsigned char* in_ptr = in_tensor.data_ptr<unsigned char>();
-    unsigned char* out_ptr = result.data_ptr<unsigned char>();
+    torch::Tensor result = torch::empty({height, width, channels}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kByte));
 
-    cudaMemcpyAsync(
-        in_ptr,
-        img_ptr,
-        vector_size * sizeof(unsigned char),
-        cudaMemcpyHostToDevice,
-        at::cuda::getCurrentCUDAStream()
-    );
     nvtxRangePop(); //Memory allocation
 
     nvtxRangePushA("Pre kernel setup");
     //Using thrust::pair for dimensions
-    auto dimensions = thrust::make_pair(height, width);
     dim3 dimBlock = getOptimalBlockDim(width, height);
     //Added channels to make use of parallelism
     //We can process multiple channels at the same time
-    dim3 dimGrid(cdiv(dimensions.second, dimBlock.x), cdiv(dimensions.first, dimBlock.y),channels);
-    //Using thrust:device_ptr to meet the requirement
-    thrust_device_uchar_ptr thrust_in_ptr = thrust::device_pointer_cast(in_ptr);
-    thrust_device_uchar_ptr thrust_out_ptr = thrust::device_pointer_cast(out_ptr);
+    dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(height, dimBlock.y),channels);
+
 
     //Memory size has to be here to compile correctly
     int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
     nvtxRangePop(); //Pre kernel setup
     //Kernel execution
     nvtxRangePushA("Kernel execution");
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
-        thrust_in_ptr.get(),
-        thrust_out_ptr.get(),
+    medianBlurKernel_simple<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
+        img.data_ptr<unsigned char>(),
+        result.data_ptr<unsigned char>(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     nvtxRangePop(); //Kernel execution
