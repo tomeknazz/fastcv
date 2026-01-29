@@ -11,9 +11,9 @@ Modern c++ (Choose 2): -> DONE
 Thrust (One of each type):
 -Fancy iterators - DONE -> thrust::make_zip_iterator
 -Vocabulary types - DONE -> thrust::pair
--Execution policies - TODO
+-Execution policies - DONE -> thrust::cuda::par
 -Execution space specifier - DONE -> __device__
--Thrust alghorithms - TODO
+-Thrust alghorithms - DONE -> thrust::count_if
 
 Async, CUB, Nvidia tools (Minimum 2): -> DONE
 -Async elements - DONE
