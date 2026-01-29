@@ -37,7 +37,8 @@ setup(
                 "kernels/median_blur_split.cu",
                 "kernels/median_blur_simple.cu",
                 "kernels/median_blur_simple_split.cu",
-                "kernels/median_blur_simple_noshared.cu"
+                "kernels/median_blur_simple_noshared.cu",
+                "kernels/median_blur_iterators.cu"
             ],
             extra_compile_args={
                 "cxx": cxx_args,

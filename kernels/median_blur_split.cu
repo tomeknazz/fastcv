@@ -22,48 +22,6 @@
 
 #include "utils.cuh"
 
-/*
-TODO:
-
-Modern c++ (Choose 2): -> DONE
--Templates
--Iterators
--Containers - DONE -> thrust::device_vector
--Functors
--Operator Overloading
--Lambda Expressions - DONE -> getOffset
--Type Aliases - DONE -> using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
-
-Thrust (One of each type):
--Fancy iterators - TODO
--Vocabulary types - DONE -> thrust::pair
--Execution policies - TODO
--Execution space specifier - DONE -> __device__
--Thrust alghorithms - DONE - DONE -> thrust::copy
-
-Async, CUB, Nvidia tools (Minimum 2): -> DONE
--Async elements - DONE
--Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize - DONE
--Compute IO overlap - DONE
--Copy compute overlap
--Cuda streams - DONE
--Pinned memory
--cudaMemcpyAsync - DONE
-Obligatory:
--Nsight analysis - TODO
--Nvidia tools extension NVTX - TODO
-
-CUDA kenel: -> DONE
--Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
--optimal block size calculation - DONE -> getOptimalBlockDim
--uses atomic operations if necessary
--shows thread synchronisation - DONE -> __syncthreads()
--uses streaming multiprocessor efficiently - DONE
--uses shared and global memory - DONE -> __shared__
-
-*/
-
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
 __device__ unsigned char sorting_network25_split(unsigned char* window){

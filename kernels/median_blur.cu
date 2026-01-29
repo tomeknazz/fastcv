@@ -16,6 +16,7 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <cub/cub.cuh>
+#include <thrust/count.h>
 #include <time.h>
 
 #include "nvtx3.hpp"
@@ -30,7 +31,7 @@ WRITE COMMENTS - @phiphi
 Modern c++ (Choose 2): -> DONE
 -Templates
 -Iterators
--Containers - DONE -> thrust::device_vector
+-Containers
 -Functors
 -Operator Overloading
 -Lambda Expressions - DONE -> getOffset
@@ -38,7 +39,7 @@ Modern c++ (Choose 2): -> DONE
 
 Thrust (One of each type):
 -Fancy iterators - TODO
--Vocabulary types - DONE -> thrust::pair
+-Vocabulary types - DONE -> thrust::make_pair
 -Execution policies - TODO
 -Execution space specifier - DONE -> __device__
 -Thrust alghorithms - TODO
@@ -52,11 +53,12 @@ Async, CUB, Nvidia tools (Minimum 2): -> DONE
 -Cuda streams - DONE?
 -Pinned memory - DONE (python)
 -cudaMemcpyAsync
+
 Obligatory:
 -Nsight analysis - DONE
 -Nvidia tools extension NVTX - DONE
 
-CUDA kenel: -> DONE
+CUDA kernel: -> DONE
 -Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
 -optimal block size calculation - DONE -> getOptimalBlockDim
 -uses atomic operations if necessary
@@ -66,8 +68,15 @@ CUDA kenel: -> DONE
 
 */
 
+// Define SWAP so to replace any other swaping functions
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
+/* Function sorting_network25
+Copied from opencv libiary
+Function saves every pixel and than swaps them until its sorted, used only with a size of a window of 25
+- pi = window[i] saves every pixel from window to a point
+- return p12 - returns a pixel from a middle of a window after the swaps
+*/
 __device__ unsigned char sorting_network25(unsigned char* window){
 
     unsigned char p0 = window[0];
@@ -123,7 +132,12 @@ __device__ unsigned char sorting_network25(unsigned char* window){
     return p12;
 
 }
-
+/* Function sorting_network9
+Copied from opencv libiary
+Function saves every pixel and than swaps them until its sorted, used only with a size of a window of 9
+- wi = window[i] saves every pixel from window to a point
+- return w4 - returns a pixel from a middle of a window after the swaps
+*/
 __device__ unsigned char sorting_network9(unsigned char* window){
 
     unsigned char w0=window[0];
@@ -146,8 +160,16 @@ __device__ unsigned char sorting_network9(unsigned char* window){
     return w4;
 
 }
-
-//For further testing
+/* Function medianBlurKernel
+Main kernel for our median blur,
+Function scales offset on half of the blur_size inputed by the user
+It applies windows with the size of blur_size
+Uses lambda expression to calculate global_col and global_row
+- col/row - saves coordinates of a pixel
+- channel - saves color channel
+- getOffset - Lambda expression calculating offset for global_row and global_col
+- shared_memory - saves memory in shared memory of a GPU for faster reading instead of reading from global memory
+*/
 __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -155,7 +177,7 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
     int channel = blockIdx.z;
 
     const int offset = blur_size / 2;
-    //auto getOffset = [](int a, int b, int offset) {return a + b - offset;};
+    auto getOffset = [](int a, int b, int offset) {return a + b - offset;};
     //Shared memory allocation
     // int shared_memory_size = (dimBlock.x + blur_size) * (dimBlock.y + blur_size)* sizeof(unsigned char);
     extern __shared__ unsigned char shared_memory[];
@@ -163,8 +185,10 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
     for(int i=threadIdx.y*blockDim.x+threadIdx.x; i<(blockDim.x + blur_size)*(blockDim.y + blur_size); i+=blockDim.x*blockDim.y){
         int shared_row = i / (blockDim.x + blur_size);
         int shared_col = i % (blockDim.x + blur_size);
-        int global_row = blockIdx.y * blockDim.y + shared_row - offset;
-        int global_col = blockIdx.x * blockDim.x + shared_col - offset;
+        //int global_row = blockIdx.y * blockDim.y + shared_row - offset;
+        //int global_col = blockIdx.x * blockDim.x + shared_col - offset;
+        int global_row = getOffset(blockIdx.y * blockDim.y,shared_row, offset);
+        int global_col = getOffset(blockIdx.x * blockDim.x,shared_col, offset);
         //Ensure we don't go out of bounds
         global_row=max(0, min(global_row, height - 1));
         global_col=max(0, min(global_col, width - 1));
@@ -189,7 +213,16 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
 }
 //Namespace for requirement
 using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
-
+/* Tensor median_blur
+Takes inputs tensor img and blur_size:
+- img - input image
+- blur_size - size of a blur
+Validates if inputs are correct
+Asynchronously transfers data to GPU
+Makes a 3D grid (x, y for pixels position, z for channel)
+Uses medianBlurKernel to calculate median for pixel and change it
+nvtxRangePushA("..."), nvtxRangePop() - used for Nsight analysis
+*/
 torch::Tensor median_blur(torch::Tensor img, int blur_size){
     nvtxRangePushA("Median Blur Start");
     //Make sure input is correct
@@ -217,7 +250,7 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     nvtxRangePop(); //Memory allocation
 
     nvtxRangePushA("Pre kernel setup");
-    //Using thrust::pair for dimensions
+    //Using thrust::make_pair for dimensions
     auto dimensions = thrust::make_pair(height, width);
     dim3 dimBlock = getOptimalBlockDim(width, height);
     //Added channels to make use of parallelism

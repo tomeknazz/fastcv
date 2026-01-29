@@ -23,51 +23,15 @@
 
 #include "utils.cuh"
 
-/*
-TODO:
-WRITE COMMENTS - @phiphi
-
-Modern c++ (Choose 2): -> DONE
--Templates
--Iterators
--Containers - DONE -> thrust::device_vector
--Functors
--Operator Overloading
--Lambda Expressions - DONE -> getOffset
--Type Aliases - DONE -> using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
-
-Thrust (One of each type):
--Fancy iterators - TODO
--Vocabulary types - DONE -> thrust::pair
--Execution policies - TODO
--Execution space specifier - DONE -> __device__
--Thrust alghorithms - TODO
-
-Async, CUB, Nvidia tools (Minimum 2): -> DONE
--Async elements - DONE
--Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize
--Compute IO overlap
--Copy compute overlap - DONE
--Cuda streams - DONE?
--Pinned memory - DONE (python)
--cudaMemcpyAsync
-Obligatory:
--Nsight analysis - DONE
--Nvidia tools extension NVTX - DONE
-
-CUDA kenel: -> DONE
--Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
--optimal block size calculation - DONE -> getOptimalBlockDim
--uses atomic operations if necessary
--shows thread synchronisation - DONE -> __syncthreads()
--uses streaming multiprocessor efficiently - DONE
--uses shared and global memory - DONE -> __shared__
-
-*/
-
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
+/* Function sorting_network25_simple
+Copied from opencv libiary
+Function sorts 5x5 window by loading pixels to local registers and then swaps them
+Function avoids using loops for better optimization
+- wi = window[i] saves every pixel from window to a point
+- return w4 - returns a pixel from a middle of a window after the swaps
+*/
 __device__ unsigned char sorting_network25_simple(unsigned char* window){
 
     unsigned char p0 = window[0];
@@ -123,7 +87,13 @@ __device__ unsigned char sorting_network25_simple(unsigned char* window){
     return p12;
 
 }
-
+/* Function sorting_network9_simple
+Copied from opencv libiary
+Function sorts 3x3 window by loading pixels to local registers and then swaps them
+Function avoids using loops for better optimization
+- wi = window[i] saves every pixel from window to a point
+- return w4 - returns a pixel from a middle of a window after the swaps
+*/
 __device__ unsigned char sorting_network9_simple(unsigned char* window){
 
 
@@ -148,7 +118,16 @@ __device__ unsigned char sorting_network9_simple(unsigned char* window){
 
 }
 
-//For further testing
+/* Function medianBlurKernel_simple
+Main kernel for our median blur,
+Function scales offset on half of the blur_size inputed by the user
+It applies windows with the size of blur_size
+Uses lambda expression to calculate global_col and global_row
+- col/row - saves coordinates of a pixel
+- channel - saves color channel
+- getOffset - Lambda expression calculating offset for global_row and global_col
+- shared_memory - saves memory in shared memory of a GPU for faster reading instead of reading from global memory
+*/
 __global__ void medianBlurKernel_simple(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -191,7 +170,17 @@ __global__ void medianBlurKernel_simple(unsigned char* in, unsigned char* out,in
             out[(row * width + col) * channels + channel] = sorting_network25_simple(window);
     }
 }
-
+/* Tensor median_blur_simple
+Takes inputs tensor img and blur_size:
+- img - input image
+- blur_size - size of a blur
+Validates if inputs are correct
+Skips asynchronic transfer data to GPU to save time, instead uses pointers on GPU
+Makes a 3D grid (height, width for pixels position, channels for color channel)
+Dynamically allocates shared_memory_size to avoid long time reading from global memory
+Uses medianBlurKernel_simple to calculate median for pixel and change it
+nvtxRangePushA("..."), nvtxRangePop() - used for Nsight analysis
+*/
 torch::Tensor median_blur_simple(torch::Tensor img, int blur_size){
     nvtxRangePushA("Median Blur Start");
     //Make sure input is correct
