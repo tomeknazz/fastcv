@@ -177,7 +177,6 @@ torch::Tensor median_blur_split(torch::Tensor img, int blur_size){
 
     for(int i=0; i<stream_count; ++i){
         int y_start = i * segment_height;
-        // Obsługa ostatniego segmentu (reszta z dzielenia)
         int current_segment_height = (i == stream_count - 1) ? (height - y_start) : segment_height;
         int segment_size = current_segment_height * width * channels * sizeof(unsigned char);
         int offset = y_start * width * channels;

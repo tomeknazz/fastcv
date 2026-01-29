@@ -177,7 +177,6 @@ torch::Tensor median_blur_simple_split(torch::Tensor img, int blur_size){
         int y_start = i * segment_height;
         int current_segment_height = (i == stream_count - 1) ? (height - y_start) : segment_height;
         int offset = y_start * width * channels;
-        int segment_elements = current_segment_height * width * channels; // do debugowania
 
         dim3 dimBlock = getOptimalBlockDim(width, current_segment_height);
         dim3 dimGrid(cdiv(width, dimBlock.x), cdiv(current_segment_height, dimBlock.y), channels);

@@ -24,49 +24,6 @@
 
 #include "utils.cuh"
 
-/*
-TODO:
-WRITE COMMENTS - @phiphi
-
-Modern c++ (Choose 2): -> DONE
--Templates
--Iterators
--Containers
--Functors
--Operator Overloading
--Lambda Expressions - DONE -> getOffset
--Type Aliases - DONE -> using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
-
-Thrust (One of each type):
--Fancy iterators - TODO
--Vocabulary types - DONE -> thrust::make_pair
--Execution policies - TODO
--Execution space specifier - DONE -> __device__
--Thrust alghorithms - TODO
-
-Async, CUB, Nvidia tools (Minimum 2): -> DONE
--Async elements - DONE
--Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize
--Compute IO overlap
--Copy compute overlap - DONE
--Cuda streams - DONE?
--Pinned memory - DONE (python)
--cudaMemcpyAsync
-
-Obligatory:
--Nsight analysis - DONE
--Nvidia tools extension NVTX - DONE
-
-CUDA kernel: -> DONE
--Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
--optimal block size calculation - DONE -> getOptimalBlockDim
--uses atomic operations if necessary
--shows thread synchronisation - DONE -> __syncthreads()
--uses streaming multiprocessor efficiently - DONE
--uses shared and global memory - DONE -> __shared__
-
-*/
 
 // Define SWAP so to replace any other swaping functions
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }

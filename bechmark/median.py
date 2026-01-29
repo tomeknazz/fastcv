@@ -23,6 +23,7 @@ def benchmark_blur(sizes=[1024, 2048, 4096], runs=100):
         
         results.append((size, cv_time))
         print(f"openCV (CPU): {cv_time:.4f} ms")
+        
         """
         #for simple
         #img_torch = torch.from_numpy(img_np).cuda()
@@ -30,18 +31,20 @@ def benchmark_blur(sizes=[1024, 2048, 4096], runs=100):
         
         #for normal
         img_torch = torch.from_numpy(img_np).pin_memory()
-        _ = fastcv.median_blur(img_torch, 5)
-        #_ = fastcv.median_blur_iterators(img_torch, 5)
+        img_torch = torch.from_numpy(img_np).cuda()
+        _ = fastcv.median_blur_simple_split(img_torch, 5)
+
         start = time.perf_counter()
         for _ in range(runs):
-            _ = fastcv.median_blur(img_torch, 5)
-            #_ = fastcv.median_blur_iterators(img_torch, 5)
+            _ = fastcv.median_blur_simple_split(img_torch, 5)
+
         torch.cuda.synchronize()
         end = time.perf_counter()
         fc_time = (end - start) / runs * 1000  # ms per run
 
         results.append((size, fc_time))
         print(f"fastcv (CUDA): {fc_time:.4f} ms")
+
 
     return results
 
