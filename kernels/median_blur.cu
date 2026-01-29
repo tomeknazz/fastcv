@@ -24,60 +24,18 @@
 
 #include "utils.cuh"
 
-/*
-TODO:
-WRITE COMMENTS - @phiphi
-
-Modern c++ (Choose 2): -> DONE
--Templates
--Iterators
--Containers
--Functors
--Operator Overloading
--Lambda Expressions - DONE -> getOffset
--Type Aliases - DONE -> using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
-
-Thrust (One of each type):
--Fancy iterators - TODO
--Vocabulary types - DONE -> thrust::make_pair
--Execution policies - TODO
--Execution space specifier - DONE -> __device__
--Thrust alghorithms - TODO
-
-Async, CUB, Nvidia tools (Minimum 2): -> DONE
--Async elements - DONE
--Comparison between Thrust and CUB implementation
--cudaDeviceSynchronize
--Compute IO overlap
--Copy compute overlap - DONE
--Cuda streams - DONE?
--Pinned memory - DONE (python)
--cudaMemcpyAsync
-
-Obligatory:
--Nsight analysis - DONE
--Nvidia tools extension NVTX - DONE
-
-CUDA kernel: -> DONE
--Has to use grid,block,thread indexing - DONE -> BlockIdx, threadIdx etc.
--optimal block size calculation - DONE -> getOptimalBlockDim
--uses atomic operations if necessary
--shows thread synchronisation - DONE -> __syncthreads()
--uses streaming multiprocessor efficiently - DONE
--uses shared and global memory - DONE -> __shared__
-
-*/
-
 // Define SWAP so to replace any other swaping functions
 #define SWAP(a, b) { unsigned char temp = a; a = min(a, b); b = max(temp, b); }
 
+
 /* Function sorting_network25
 Copied from opencv libiary
-Function saves every pixel and than swaps them until its sorted, used only with a size of a window of 25
-- pi = window[i] saves every pixel from window to a point
-- return p12 - returns a pixel from a middle of a window after the swaps
+Function sorts 5x5 window by loading pixels to local registers and then swaps them
+Function avoids using loops for better optimization
+- wi = window[i] saves every pixel from window to a point
+- return w4 - returns a pixel from a middle of a window after the swaps
 */
-__device__ unsigned char sorting_network25(unsigned char* window){
+__device__ unsigned char sorting_network25_iterators(unsigned char* window){
 
     unsigned char p0 = window[0];
     unsigned char p1 = window[1];
@@ -134,11 +92,12 @@ __device__ unsigned char sorting_network25(unsigned char* window){
 }
 /* Function sorting_network9
 Copied from opencv libiary
-Function saves every pixel and than swaps them until its sorted, used only with a size of a window of 9
+Function sorts 3x3 window by loading pixels to local registers and then swaps them
+Function avoids using loops for better optimization
 - wi = window[i] saves every pixel from window to a point
 - return w4 - returns a pixel from a middle of a window after the swaps
 */
-__device__ unsigned char sorting_network9(unsigned char* window){
+__device__ unsigned char sorting_network9_iterators(unsigned char* window){
 
     unsigned char w0=window[0];
     unsigned char w1=window[1];
@@ -170,7 +129,7 @@ Uses lambda expression to calculate global_col and global_row
 - getOffset - Lambda expression calculating offset for global_row and global_col
 - shared_memory - saves memory in shared memory of a GPU for faster reading instead of reading from global memory
 */
-__global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
+__global__ void medianBlurKernel_iterators(unsigned char* in, unsigned char* out,int width, int height, int channels, int blur_size) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
      //Using z dimension for channel
@@ -208,11 +167,23 @@ __global__ void medianBlurKernel(unsigned char* in, unsigned char* out,int width
                 }
             }
             //Compute median
-            out[(row * width + col) * channels + channel] = sorting_network25(window);
+            out[(row * width + col) * channels + channel] = sorting_network25_iterators(window);
     }
 }
 //Namespace for requirement
 using thrust_device_uchar_ptr = thrust::device_ptr<unsigned char>;
+/* Struct PixelsDifferent
+Comperres 2 tuples to see if the pixels have changed
+returns a boolean, true - pixels are not the same, false - pixels are the same
+- get<0> - pixel from first image (input image)
+- get<1> - pixel from second image (output image)
+*/
+struct PixelsDifferent {
+    __host__ __device__
+    bool operator()(const thrust::tuple<unsigned char, unsigned char>& t) const {
+        return thrust::get<0>(t) != thrust::get<1>(t);
+    }
+};
 /* Tensor median_blur
 Takes inputs tensor img and blur_size:
 - img - input image
@@ -221,9 +192,10 @@ Validates if inputs are correct
 Asynchronously transfers data to GPU
 Makes a 3D grid (x, y for pixels position, z for channel)
 Uses medianBlurKernel to calculate median for pixel and change it
+Calculates the precentage of changes in input image and output image
 nvtxRangePushA("..."), nvtxRangePop() - used for Nsight analysis
 */
-torch::Tensor median_blur(torch::Tensor img, int blur_size){
+torch::Tensor median_blur_iterators(torch::Tensor img, int blur_size){
     nvtxRangePushA("Median Blur Start");
     //Make sure input is correct
     assert(img.device().type() == torch::kCPU);
@@ -265,12 +237,40 @@ torch::Tensor median_blur(torch::Tensor img, int blur_size){
     nvtxRangePop(); //Pre kernel setup
     //Kernel execution
     nvtxRangePushA("Kernel execution");
-    medianBlurKernel<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
+    medianBlurKernel_iterators<<<dimGrid, dimBlock, shared_memory_size, at::cuda::getCurrentCUDAStream()>>>(
         thrust_in_ptr.get(),
         thrust_out_ptr.get(),
         width, height, channels, blur_size); //__global__ void blurKernel(unsigned char *in, unsigned char *out, int w, int h, int channels, int BLUR_SIZE) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     nvtxRangePop(); //Kernel execution
+    auto result_cpu = torch::empty_like(result);
+    unsigned char* cpu_ptr = result_cpu.data_ptr<unsigned char>();
+    cudaMemcpyAsync(
+        cpu_ptr,
+        out_ptr,
+        vector_size * sizeof(unsigned char),
+        cudaMemcpyDeviceToHost,
+        at::cuda::getCurrentCUDAStream()
+    );
+    cudaStreamSynchronize(at::cuda::getCurrentCUDAStream());
+
+    nvtxRangePushA("Thrust Transform Iterators - counting changed pixels");
+    auto zipped_start = thrust::make_zip_iterator(thrust::make_tuple(thrust_in_ptr , thrust_out_ptr));
+    auto zipped_end = thrust::make_zip_iterator(thrust::make_tuple(thrust_in_ptr  + vector_size, thrust_out_ptr + vector_size));
+
+    PixelsDifferent is_different_functor;
+
+    int changed_pixels = thrust::count_if(
+        thrust::cuda::par.on(at::cuda::getCurrentCUDAStream()),
+        zipped_start,
+        zipped_end,
+        is_different_functor
+    );
+    //printf("Pixels changed - testing: %f / %f\n", (float)changed_pixels, (float)vector_size);
+    float percentage = (float)changed_pixels / (float)vector_size * 100.0f;
+    printf("Pixels changed: %.2f%%\n",percentage);
+
+    nvtxRangePop(); //Thrust Iterators End
     nvtxRangePop(); //Median Blur End
 
     return result;

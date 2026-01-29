@@ -11,7 +11,7 @@ torch::Tensor median_blur_split(torch::Tensor img, int blur_size);
 torch::Tensor median_blur_simple(torch::Tensor img, int blur_size);
 torch::Tensor median_blur_simple_split(torch::Tensor img, int blur_size);
 torch::Tensor median_blur_simple_noshared(torch::Tensor img, int blur_size);
-torch::Tensor median_blur_iterators(torch::Tensor img, int blur_size);
+torch::Tensor median_blur_without_iterators(torch::Tensor img, int blur_size);
 
 
 
@@ -26,5 +26,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
     m.def("median_blur_simple", &median_blur_simple, "median blur simple kernel");
     m.def("median_blur_simple_split", &median_blur_simple_split, "median blur simple split kernel");
     m.def("median_blur_simple_noshared", &median_blur_simple_noshared, "median blur simple no shared kernel");
-    m.def("median_blur_iterators", &median_blur_iterators, "median blur iterator kernel");
+    m.def("median_blur_without_iterators", &median_blur_without_iterators, "median blur without iterators kernel");
 }
