@@ -1,4 +1,5 @@
 import time
+from time import sleep
 
 import cv2
 import torch
@@ -6,14 +7,12 @@ import fastcv
 
 
 img = cv2.imread("../artifacts/test.jpg")
-img1 = cv2.imread("../artifacts/binary.jpg")
-img2 = cv2.imread("../artifacts/grayscale.jpg")
 
 #img_tensor1 = torch.from_numpy(img).cuda()
-img_tensor1 = torch.from_numpy(img).pin_memory()
+img_tensor1 = torch.from_numpy(img).pin_memory().cuda()
 t1 = time.time()
 #median_tensor1 = fastcv.median_blur_simple(img_tensor1, 5)
-median_tensor1 = fastcv.median_blur(img_tensor1, 5)
+median_tensor1 = fastcv.median_blur_simple_split(img_tensor1, 5)
 t2 = time.time()
 median_np1 = median_tensor1.squeeze(-1).cpu().numpy()
 cv2.imwrite("output_median.jpg", median_np1)
